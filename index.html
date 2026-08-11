@@ -278,7 +278,7 @@ let db = loadDB();
 function imgUrl(anime){
   const path = anime.image ? (anime.image.original || anime.image.preview) : '';
   if(!path) return '';
-  return path.startsWith('http') ? path : 'https://shikimori.one' + path;
+  return path.startsWith('http') ? path : 'https://watchlog.a27012010aa.workers.dev/api' + path;
 }
 
 function isMissingPoster(anime){
