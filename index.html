@@ -105,6 +105,12 @@
   .poster-wrap img.loaded{opacity:1; animation:imgIn .4s ease-out;}
   @keyframes imgIn{from{opacity:0; filter:blur(6px);} to{opacity:1; filter:blur(0);}}
   .card:hover .poster-wrap img{transform:scale(1.07);}
+  .poster-fallback{
+    width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg, #1c1c1f, #141416);
+    color:var(--text-faint); font-family:'Bebas Neue'; font-size:32px; letter-spacing:2px;
+  }
+  .modal-poster-img.poster-fallback{font-size:44px;}
   .badge{
     position:absolute; top:8px; left:8px; background:var(--accent); color:#fff;
     font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.5px;
@@ -261,7 +267,7 @@
 
 <script>
 const DB_KEY = 'watchlog_db_v1';
-const API = 'https://shikimori.one/api';
+const API = 'https://watchlog.a27012010aa.workers.dev/api';
 
 function loadDB(){
   try{ return JSON.parse(localStorage.getItem(DB_KEY)) || {}; }catch(e){ return {}; }
@@ -273,6 +279,79 @@ function imgUrl(anime){
   const path = anime.image ? (anime.image.original || anime.image.preview) : '';
   if(!path) return '';
   return path.startsWith('http') ? path : 'https://shikimori.one' + path;
+}
+
+function isMissingPoster(anime){
+  const path = anime.image ? (anime.image.original || anime.image.preview || '') : '';
+  return !path || /missing/i.test(path);
+}
+
+const fallbackCache = {};
+const fallbackQueue = [];
+let fallbackProcessing = false;
+
+function enqueueFallback(anime){
+  if(fallbackCache[anime.id] !== undefined) return;
+  fallbackCache[anime.id] = null;
+  fallbackQueue.push(anime);
+  processFallbackQueue();
+}
+
+async function processFallbackQueue(){
+  if(fallbackProcessing) return;
+  fallbackProcessing = true;
+  while(fallbackQueue.length){
+    const anime = fallbackQueue.shift();
+    const url = await fetchFallbackPoster(anime);
+    fallbackCache[anime.id] = url;
+    if(url){
+      document.querySelectorAll(`[data-poster-id="${anime.id}"]`).forEach(el => {
+        const extraClass = el.dataset.extraClass || '';
+        el.outerHTML = `<img class="${extraClass}" src="${url}" loading="lazy" alt="" onload="this.classList.add('loaded')">`;
+      });
+    }
+    await new Promise(r => setTimeout(r, 350));
+  }
+  fallbackProcessing = false;
+}
+
+async function fetchFromJikan(anime){
+  const res = await fetch(`https://api.jikan.moe/v4/anime/${anime.id}`);
+  if(!res.ok) throw new Error('jikan miss');
+  const data = await res.json();
+  const img = data?.data?.images?.jpg?.large_image_url || data?.data?.images?.webp?.large_image_url;
+  if(!img) throw new Error('jikan no image');
+  return img;
+}
+
+async function fetchFromKitsu(anime){
+  const q = encodeURIComponent(anime.russian || anime.name || '');
+  const res = await fetch(`https://kitsu.io/api/edge/anime?filter[text]=${q}&page[limit]=1`);
+  if(!res.ok) throw new Error('kitsu miss');
+  const data = await res.json();
+  const img = data?.data?.[0]?.attributes?.posterImage?.large || data?.data?.[0]?.attributes?.posterImage?.original;
+  if(!img) throw new Error('kitsu no image');
+  return img;
+}
+
+async function fetchFallbackPoster(anime){
+  try{
+    return await Promise.any([fetchFromJikan(anime), fetchFromKitsu(anime)]);
+  }catch(e){
+    return null;
+  }
+}
+
+function posterHtml(anime, extraClass){
+  const title = anime.russian || anime.name || '';
+  if(isMissingPoster(anime)){
+    if(fallbackCache[anime.id]){
+      return `<img class="${extraClass||''}" src="${fallbackCache[anime.id]}" loading="lazy" alt="" onload="this.classList.add('loaded')">`;
+    }
+    enqueueFallback(anime);
+    return `<div class="poster-fallback ${extraClass||''}" data-poster-id="${anime.id}" data-extra-class="${extraClass||''}"><span>${title.slice(0,2).toUpperCase()}</span></div>`;
+  }
+  return `<img class="${extraClass||''}" src="${imgUrl(anime)}" loading="lazy" alt="" onload="this.classList.add('loaded')">`;
 }
 
 function skeletonGrid(container, count){
@@ -405,7 +484,7 @@ function renderCard(anime, index){
   const fillPct = total && total !== '?' && total > 0 ? Math.min(100, (aired/total)*100) : 0;
   el.innerHTML = `
     <div class="poster-wrap">
-      <img src="${imgUrl(anime)}" loading="lazy" alt="" onload="this.classList.add('loaded')">
+      ${posterHtml(anime)}
       ${isNew ? '<span class="badge new">Новая серия</span>' : (stored?.tracked ? '<span class="badge">Отслеживается</span>' : '')}
     </div>
     <div class="card-body">
@@ -445,7 +524,7 @@ async function openModal(anime, stored){
   modalContent.innerHTML = `
     <button class="close-x" id="closeModal">✕</button>
     <div class="modal-top">
-      <div class="modal-poster"><img src="${imgUrl(full)}"></div>
+      <div class="modal-poster">${posterHtml(full, 'modal-poster-img')}</div>
       <div class="modal-info">
         <h2>${full.russian || full.name}</h2>
         <div class="modal-tags">
